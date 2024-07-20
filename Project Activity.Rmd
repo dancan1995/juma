@@ -1,0 +1,1020 @@
+---
+title: "Final Project"
+author: "Dancun Juma"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document:
+    css: C:/Users/danca/Downloads/gvsu_readthedown_theme.css
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, message=FALSE}
+# Loading the required libraries
+library(readr)
+library(tidyverse)
+library(knitr)
+library(skimr)
+library(dplyr)
+library(tibble)
+library(haven)
+library(scales)
+library(stringr)
+library(flextable)
+library(lubridate)
+library(ggpubr)
+library(leaflet)
+library(sf)
+library(tigris)
+library(plotly)
+library(reshape2)
+```
+
+*Import your data into R.*
+```{r}
+# Read the data from the URL
+elections_data <- read_csv("https://raw.githubusercontent.com/dilernia/STA418-518/main/Data/1976-2020-president.csv")
+
+# Check the first few rows of the data
+head(elections_data)
+```
+
+## 1. Data Dictionary 
+
+*Create a data dictionary showcasing the variables used in your analyses. An example R Markdown file showing creation of a data dictionary for the Palmer Penguins data set is available on Blackboard.*
+
+```{r, warning=FALSE}
+data(elections_data)
+
+# Creating data dictionary.
+dataDictionary <- tibble(
+  Variable = colnames(elections_data),
+  Description = c(
+    "year (election year)",
+    "state (name of the state)",
+    "state_po (postal code abbreviation)",
+    "state_fips (state fips code)",
+    "state_cen (state census code)",
+    "state_ic (state Inter-university Consortium for Political and
+     Social Research code)",
+    "office (name of the public office to which the candidate is
+     seeking election)",
+    "candidate (candidate name)",
+    "party_detailed (full name of the candidate's political party)",
+    "writein (state census code)",
+    "candidatevotes (number of votes for candidate)",
+    "totalvotes (total votes cast in the election)",
+    "version (version)",
+    "notes (notes)",
+    "party_simplified (just the major parties, with others marked as other)"
+  ),
+Type = map_chr(elections_data, .f = function(x){typeof(x)[1]}),
+Class = map_chr(elections_data, .f = function(x){class(x)[1]}))
+```
+
+```{r}
+flextable::flextable(dataDictionary, cwidth = 4)
+```
+
+
+## 2. Data Cleaning
+### a. Merging Datasets
+```{r}
+# Importing state level census data
+state_census_data <- read_csv("https://raw.githubusercontent.com/dilernia/STA418-518/main/Data/census_data_state_2008-2021.csv")
+
+head(state_census_data)
+```
+**Now MERGING**
+*Filtering the elections data to show the total votes for the year 2016 based on each state*
+```{r}
+# Filter for the year 2016 and select 'state' and 'totalvotes'
+filtered_elections_2016 <- elections_data %>%
+  filter(year == 2016) %>%
+  select(state, totalvotes)
+
+# Capitalize the first letter of each state
+filtered_elections_2016 <- filtered_elections_2016 %>%
+  mutate(state = tolower(state),
+         state = tools::toTitleCase(state))
+
+# Remove duplicates based on state and totalvotes
+filtered_elections_2016 <- distinct(filtered_elections_2016, state, totalvotes)
+
+# Display the resulting unique data
+head(filtered_elections_2016)
+```
+
+*Filtering the state census data for the year 2016 and select 'state' and 'population'*
+```{r}
+# Rename the 'county_state' column to 'state'
+state_census_data <- state_census_data %>% rename(state = county_state)
+
+# Filter for the year 2016 and select 'state' and 'population'
+filtered_census_2016 <- state_census_data %>%
+  filter(year == 2016) %>%
+  select(state, prop_poverty, population)
+
+# Display the resulting data
+head(filtered_census_2016)
+```
+
+*Now we are merging the previous filter elections data with total votes and the new filtered census data both for the year 2016*
+```{r}
+# Merge the two tables based on 'state'
+merged_data <- left_join(filtered_elections_2016, filtered_census_2016, filtered_census_2016_1, by = "state")
+
+# Calculating the population of poor people and creating the new variables called pop_poverty(population of the poor) and pop_rich(population of the rich).
+merged_data <- mutate(merged_data,
+                      pop_poor = round(prop_poverty * population),
+                      pop_rich = round(population - pop_poor))
+
+# Arrange the data based on prop_poverty in descending order
+merged_data <- arrange(merged_data, desc(prop_poverty))
+
+# Displaying the head and tail of the resulting data
+head <- head(merged_data, 10)
+tail <- tail(merged_data, 10)
+
+# Creating flextable for head and tail of the merged dataset
+flextable::flextable(head, cwidth = 4)%>%
+  set_caption("Top 10 states with highest poverty proportion in 2016")
+flextable::flextable(tail, cwidth = 4)%>%
+  set_caption("Top 10 states with lowest poverty proportion in 2016")
+```
+
+According to the poverty proportion coefficient, the poorest state in 2016 was Mississippi followed by Louisiana. Moreover, New Hampshire and Hawaii were the reachest states based on the poverty proportion of the states.
+
+
+### b. String manipulation
+**Extracting Substrings with str_sub**
+```{r}
+# 1. Extracting Substrings with str_sub
+elections_data <- elections_data %>%
+  mutate(state_abbrev = str_sub(state, start = 1, end = 3))
+```
+
+The code above uses `str_sub` whereby state variable in the presidential elections dataset is extracted and the responses changed to abbreviation format using the first 3 letters for example `Alabama` will be `ALA`.
+
+**Replacing Substrings with str_replace**
+```{r}
+# 2. Replacing Substrings with str_replace
+elections_data <- elections_data %>%
+  mutate(party_simplified = str_replace(party_simplified, "DEMOCRAT", "Dem"),
+         party_simplified = str_replace(party_simplified, "REPUBLICAN", "Rep"))
+```
+
+The code above for `str_replace()` function extracts the party-simplified variable and changes the `DEMOCRAT` response to `Dem` and `REPUBLICAN` response to `REP`.
+
+**Splitting Strings with str_split**
+```{r, warning=FALSE}
+# 3. Splitting Strings with str_split
+elections_data <- elections_data %>%
+  separate(candidate, into = c("first_name", "last_name"), sep = ", ", remove = FALSE)
+
+# Create a flextable from the result
+flextable(head(elections_data[, c("state_abbrev", "party_simplified", "first_name", "last_name")]), cwidth = 2) %>%
+  set_caption("Table showing the columns obtained from the 3 string functions used in the String manipulation part")
+```
+The code for the string fucntion `str_split()` was used here to split the first and last names of the presidential candidates.
+
+## 3. Exploratory Data Analysis
+### a. Tables of Summary Statistics
+*Explore and display high-level characteristics of your data set, e.g., important variables and their types, different levels for factor variables, any patterns of missing values.*
+```{r}
+# Important variables and their types
+str(elections_data)
+
+# Skim
+skimr::skim(elections_data)
+
+# Glimpse
+glimpse(elections_data)
+```
+
+```{r}
+# Overall sum of missing values
+missing_values <- sum(colSums(is.na(elections_data)))
+print(missing_values)
+```
+There are `r missing_values` missing values in the US presidential elections state level from 1976 to 2020 dataset.
+
+*Table 1*
+```{r}
+# Table of summary showing number of Candidates from Democratic (Dem) and Republican (Rep) Parties (1976-2020)
+filtered_candidates <- elections_data %>%
+  filter(year >= 1976 & year <= 2020, str_detect(party_simplified, "(?i)Dem") | str_detect(party_simplified, "(?i)Rep"))
+
+candidates <- filtered_candidates %>%
+  group_by(Party = party_simplified) %>%
+  summarise(Candidates = n_distinct(candidate))
+
+flextable(candidates, cwidth = 4) %>%
+  set_caption("Table 1: Number of Presidential Candidates from Democratic (Dem) and Republican (Rep) Parties (1976-2020)")
+```
+The flextable table above shows that there have been more democrats candidates in the president race for the years 1976 to 2020 than the republicans.
+
+*Table 2*
+```{r, message=FALSE}
+# Filter and count candidates
+filtered_candidates <- elections_data %>%
+  filter(year >= 1976 & year <= 2020,
+         str_detect(party_simplified, "(?i)dem") | str_detect(party_simplified, "(?i)rep"))
+
+candidates_count <- filtered_candidates %>%
+  group_by(first_name, last_name, party_detailed) %>%
+  summarise(run_count = n_distinct(year),
+            years = paste(sort(unique(year)), collapse = ", ")) %>%
+  filter(run_count > 1) %>% 
+  arrange(desc(run_count))
+
+# Create flextable
+flextable1 <- flextable(candidates_count) %>%
+  set_caption("Table 2: Showing the president names, party and number of runs mentioning the years they run for presidency") %>%
+  set_table_properties(width = .5, layout = "autofit") %>%
+  set_header_labels(
+    first_name = "First Name",
+    last_name = "Last Name",
+    party_detailed = "Party",
+    run_count = "Number of Runs",
+    years = "Years"
+  ) %>%
+  theme_zebra()
+
+# Print the flextable
+print(flextable1)
+```
+Based on the table 2 above, we can come to a conclusion that most candidates run for presidency twice.
+
+*Table 3*
+```{r, message=FALSE}
+# Table to show the year,candidate, party and the totalvotes of the winners in the presidential elections.
+total_votes_each_year <- elections_data %>%
+  group_by(year, candidate, party_simplified) %>%
+  summarise(total_votes = sum(candidatevotes))
+
+winners_each_year <- total_votes_each_year %>%
+  group_by(year) %>%
+  slice(which.max(total_votes)) %>%
+  select(year, candidate, party_simplified, total_votes) %>%
+  mutate(year = str_replace_all(year, ",", ""))
+
+# Create flextable
+flex <- flextable(winners_each_year, cwidth = 3) %>%
+  set_caption("Table 3: Showing the president names, party and the total popular votes they received.(1976-2020)") %>%
+  set_table_properties(width = .5, layout = "autofit") %>%
+  theme_zebra()
+
+# Print the flextable
+print(flex)
+```
+Based on the table 3 above, we can summarize by saying that America have had 4 Republican and 8 Democrat presidential candidates won popular votes in the elections that have been held from 1976 to 2020. Out of all the candidates, President Biden Joseph R. JR garnered the most popular votes of all time in a presidential election with 81,268,908 popular votes.
+
+*Table 4*
+```{r}
+# group-level summary statistics for quantitative variables in Presidential elections data_state level data
+elections_data %>%
+  group_by(year)%>%
+  summarize(total_votes = sum(candidatevotes),
+            mean_candidatevotes = mean(candidatevotes),
+            median_candidatevotes = median(candidatevotes),
+            sd_candidatevotes = sd(candidatevotes),
+            min_candidatevotes = min(candidatevotes),
+            max_candidatevotes = max(candidatevotes))
+
+```
+*Table 5*
+```{r,message=FALSE}
+# Group by the year and writein variables and count the number of occurrences
+elections_data %>%
+  group_by(year, writein) %>%
+  summarise(count = n())
+```
+
+The table shows that there were many writeins in 2020 as compared to any other year the presidential elections were held. This means many voters manually wrote the names of other candidates who not in the ballot.
+
+*Table 6: showing Descriptive statistics for merged data*
+```{r}
+# Table showing Descriptive statistics for merged data
+summary_stats <- summary(merged_data[c("totalvotes", "prop_poverty", "population", "pop_poor", "pop_rich")])
+
+summary_stats
+```
+
+There is a large disparity in the number of votes cast, with a median of 2,001,336 and a total ranging from 258,788 to 14,181,595. The average poverty rate is 13.6%, with a range of 0.07296 to 0.20836, showing the wide range of socioeconomic situations experienced by the states. States vary greatly in size, with total populations ranging from 585,501 to 39,250,017 (mean = 6,335,834). Mean values of 889,965 for the poor and 5,445,868 for the non-poor demonstrate the diverse socioeconomic landscapes, respectively. Insights into the dynamics of U.S. presidential elections can be further developed with the help of these statistics, which offer a detailed picture of the demographic and voting traits of states.
+
+*Table 7: showing correlation for merged data*
+```{r}
+# Table showing correlation for merged data
+correlation_matrix <- cor(merged_data[c("totalvotes", "prop_poverty", "population", "pop_poor", "pop_rich")])
+
+correlation_matrix
+```
+
+
+There is a very strong positive correlation of 0.9842 between the total votes and the population, which is the most noticeable correlation. That total votes tend to rise in tandem with a state's population is indicative of a strongly linear relationship. In a similar vein, total votes correlate positively with pop_poor (0.9648) and pop_rich (0.9858), suggesting that states with larger populations of the poor and the rich also likely to have larger total votes. A weak positive association is suggested by the somewhat smaller correlation (0.0933) between total votes and prop poverty. This suggests that the percentage of the population living in poverty does not significantly affect the overall vote. The correlation matrix shows complex linkages between poverty indicators and population size, which in turn affects the overall number of votes cast.
+
+*Table 9: Regression table*
+```{r}
+# Linear Regression
+model <- lm(totalvotes ~ prop_poverty + population + pop_poor, data = merged_data)
+
+# Summary of the regression model
+summary(model)
+```
+
+1. Proportion of Population in Poverty (prop_poverty)
+
+**Null Hypothesis (H0): The coefficient for prop_poverty is equal to zero (no effect on totalvotes) & Alternative Hypothesis (H1): The coefficient for prop_poverty is not equal to zero.**
+
+Interpretation: The p-value associated with prop_poverty is 0.0325, which is less than the conventional significance level (e.g., 0.05). Therefore, we reject the null hypothesis. There is evidence to suggest that the proportion of the population in poverty has a statistically significant effect on the total votes.
+
+2. Total Population (population)
+
+**Null Hypothesis (H0): The coefficient for population is equal to zero (no effect on totalvotes) & Alternative Hypothesis (H1): The coefficient for population is not equal to zero.**
+
+Interpretation: The p-value associated with population is very small (4.64e-10), indicating strong evidence against the null hypothesis. Total population is a statistically significant predictor of total votes.
+
+3. Population in Poverty (pop_poor)
+
+**Null Hypothesis (H0): The coefficient for pop_poor is equal to zero (no effect on totalvotes) & Alternative Hypothesis (H1): The coefficient for pop_poor is not equal to zero.**
+
+Interpretation: The p-value associated with pop_poor is very small (0.000246), providing strong evidence against the null hypothesis. Population in poverty is a statistically significant predictor, and its negative coefficient suggests that higher populations in poverty are associated with lower total votes.
+
+*Example Usage*
+```{r}
+# Coefficients from the regression model
+intercept <- -712000
+coef_prop_poverty <- 6931000
+coef_population <- 0.7592
+coef_pop_poor <- -2.651
+
+# Example data for prediction
+example_data <- data.frame(prop_poverty = 0.09, population = 4000000, pop_poor = 350000)
+
+# Predicting total votes
+predicted_total_votes <- predict(model, newdata = example_data)
+
+# Display the predicted total votes
+cat("Predicted Total Votes:", round(predicted_total_votes))
+```
+*Table 10: showing Summary of statistics of the data set that is merged with the elections data and the census data*
+```{r}
+# Summary tables for the data set that is merged with the elections data and the census data
+elections_2020 <- elections_data %>%
+  filter(year == 2020 & !is.na(candidatevotes))
+
+# Merge the filtered election data with the state census data based on the "state" variable
+merged_data_2020 <- left_join(elections_2020, state_census_data, by = "state")
+
+# Group by state and calculate summary statistics for 2016
+summary_stats_2020 <- merged_data_2020 %>%
+  group_by(state) %>%
+  summarize(
+    mean_votes = mean(candidatevotes),
+    sum_votes = sum(candidatevotes),
+    max_votes = max(candidatevotes)
+    )
+
+# Create a flextable
+flextable <- flextable(summary_stats_2020, cwidth = 2)
+
+# Set caption
+flextable <- flextable %>% set_caption("Summary Tables for Merged Presidential Elections and Census Data for 2020")
+
+# Print the flextable
+flextable
+```
+
+
+### b. Data Visualizations
+*Plot 1*
+*VISUALIZATIONS FROM MERGING*
+Now we are plotting a Bar Plot of showing rich and poor population for the year 2016 of each State
+```{r}
+# Creating a long format for data to use in ggplot
+merged_data_long <- tidyr::gather(merged_data, key = "Variable", value = "Value", population, pop_poor, pop_rich)
+
+# Reorder states based on pop_poor in descending order
+merged_data_long$state <- reorder(merged_data_long$state, -merged_data_long$Value)
+
+# Grouped Bar Chart with reordered states
+ggplot(merged_data_long, aes(x = state, y = Value, fill = Variable)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.7) +
+  labs(title = "Bar Plot of showing rich and poor population for the year 2016 of each State",
+       x = "State",
+       y = "Population",
+       fill = "Variable",
+       caption = "Data: Massachusetts Institute of Technology website") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.title = element_blank(),
+        legend.position = "bottom") +
+  scale_y_continuous(labels = scales::comma_format())
+```
+
+Based on the plot above, we can conclude that the higher the population in a state the more likely the part of the population in that state's population will be poor. taking for example California have the highest population, highest population and highest population poor as well. Wyoming had the lowest population.
+
+
+*Plot 2*
+*Now let us plot a scatterplot of Total Votes vs. Population for the year 2016 based on the States*
+```{r, warning=FALSE}
+# Scatterplot
+ggplot(merged_data, aes(x = population, y = totalvotes)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, linetype = "dotted", color = alpha("blue", 0.2)) +
+  labs(title = "Scatterplot of Total Votes vs. Population for the year 2016 based on the States",
+       x = "Population",
+       y = "Total Votes",
+       caption = "Data: Massachusetts Institute of Technology website") +
+  theme_minimal()+
+  scale_x_continuous(labels = scales::comma_format())+
+  scale_y_continuous(labels = scales::comma_format())+
+  theme(axis.text.x = element_text(size = 7),axis.text.y = element_text(size = 7))
+```
+
+
+The scatterplot illustrates the relationship between the population and total votes for each state in the year 2016. Each point on the plot represents a state, with its population on the x-axis and total votes on the y-axis. The blue dotted line is the best-fit line, indicating the linear trend in the data. There plot shows there is correlation between population and total votes cast.
+
+
+*Plot 3*
+*Now let me plot a bar plot to show the comparison of Population and Total Votes by State in descending order for the (2016)*
+```{r}
+# Create a bar plot
+# The plot shows comparison of Population and Total Votes by State (2016)
+ggplot(merged_data, aes(x = reorder(state, -totalvotes))) +
+  geom_bar(aes(y = population, fill = "Population"), stat = "identity", position = "dodge") +
+  geom_bar(aes(y = totalvotes, fill = "Total Votes"), stat = "identity", position = "dodge") +
+  labs(
+    title = "Comparison of Population and Total Votes by State (2016)",
+    y = "Count",
+    x = "State"
+  ) +
+  scale_fill_manual(
+    values = c("Population" = "black", "Total Votes" = "green1"),
+    name = "Legend Title"
+  ) +
+  coord_cartesian(ylim = c(0, max(merged_data$totalvotes, merged_data$population) * 1.1)) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_y_continuous(labels = scales::comma_format())
+```
+
+According to the bar plot above, the top states with higher population and total votes were Carlifonia, Florida, Texas, New York, pennsylvania and Illinois. The less populated states were Wyoming, District of Columbia, Alaska, Vermont, North Dakota, South Dakota and Hawaii.
+
+
+**Plot 4: Showing Total Candidate Votes by Party Affiliation and State**
+```{r, message=FALSE}
+# Create a new dataset with the total candidate votes for each party and state
+party_vote_data <- elections_data %>%
+  group_by(state, party_simplified) %>%
+  summarise(Total_Votes = sum(candidatevotes, na.rm = TRUE))
+
+# Order the levels of 'state' based on the total votes for Democrats (Dem)
+party_vote_data <- party_vote_data %>%
+  mutate(state = factor(state, levels = unique(state[order(-Total_Votes)])))
+
+# Create a grouped bar chart with formatted y-axis labels
+ggplot(party_vote_data, aes(x = state, y = Total_Votes, fill = party_simplified)) +
+  geom_bar(stat = "identity", position = "dodge", width = 0.8) +
+  labs(
+    title = "Total Candidate Votes by Party Affiliation and State",
+    x = "State",
+    y = "Total Candidate Votes",
+    caption = "Data source: Massachusetts Institute of Technology website"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7),
+        legend.title = element_blank(),
+        legend.position = "bottom") +
+  theme(axis.text.y = element_text(size = 7)) +
+  scale_y_continuous(labels = scales::comma_format()) +
+  scale_fill_manual(values = c("Dem" = "#4575b4", "Rep" = "#d73027")) 
+```
+
+According to the plot above, we can observe that the top states that belong to the democrats include California, New York and Florida. On the other hand, Republicans have been winning in Virginia and Utah among other states.
+
+**Plot 5: Showing Winner's Votes as Proportion of Total Votes (1976-2020 **
+```{r, warning=FALSE, message=FALSE}
+total_votes1 <- elections_data %>%
+  group_by(year) %>%
+  summarise(totalvotes = sum(unique(totalvotes)))
+candidate_votes_each_year <- elections_data %>%
+  group_by(year, party_simplified) %>%
+  summarise(Candidatevotes = sum(candidatevotes))
+winners_each_year <- candidate_votes_each_year %>%
+  group_by(year) %>%
+  slice(which.max(Candidatevotes)) %>%
+  select(year, party_simplified, Candidatevotes)
+winner_proportion <- left_join(winners_each_year, total_votes1, by = "year") %>%
+  mutate(winner_proportion = (Candidatevotes / totalvotes) * 100)
+ggplot(winner_proportion, aes(x = year, y = winner_proportion, color = party_simplified)) +
+  geom_point() +
+  scale_x_continuous(breaks = seq(1976, 2020, by = 4)) +
+  scale_y_continuous(breaks = seq(42, 60, by = 1))+
+  scale_color_manual(values = c("#4575b4", "#d73027"), labels = c("DEMOCRAT", "REPUBLICAN")) +
+  labs(title = "Winner's Votes as Proportion of Total Votes (1976-2020)", 
+       x = "Year", 
+       y = "Percentage of Votes", 
+       color = "Party",
+       caption = "Data Source: Massachusetts Institute of Technology website") +
+  theme(legend.position = "bottom",
+        text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 0,
+                                   size = 10,vjust=0.2))
+```
+
+For the period between 1976 to 2020, the plot 5 above shows that majority of the winners of the presidential elections have been from the Democrats party. The Democrats have also won popular votes 4 consecutive times from 2008 despite in 2016 they won popular votes, their candidate did not become the president because of She did not win the Electoral College votes.
+
+
+*Plot 6: Percentage of Votes by State in the 2016 Presidential Election (A comparison between Democrats and Republicans)*
+*Create at least one ggplot visualization for your data, including appropriate labels with units of measurement when applicable and a specified theme.*
+```{r warning=FALSE, message=FALSE}
+# Filter data for 2016
+election_year <- 2016
+filtered_data <- elections_data %>% 
+  filter(year == election_year)
+
+# Calculate the percentage of votes for each party
+filtered_data <- filtered_data %>%
+  group_by(state, party_simplified) %>%
+  summarise(Percentage_Votes = sum(candidatevotes) / sum(totalvotes) * 100)
+
+# Explicitly set levels for party_simplified including "Other"
+filtered_data$party_simplified <- factor(filtered_data$party_simplified, 
+                                          levels = c("Dem", "Rep", "Other"))
+
+# Create a bar chart for the percentage of votes
+ggplot(filtered_data, aes(x = reorder(state, desc(Percentage_Votes)), y = Percentage_Votes, fill = party_simplified)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c(Dem = "blue", Rep = "red", Other = "green")) +
+  labs(
+    subtitle = "A comparison between Democrats and Republicans",
+    x = "State",
+    y = "Percentage of Votes",
+    caption = "Data Source: Massachusetts Institute of Technology website",
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 7)) +
+  theme(axis.text.y = element_text(size = 7)) +
+  ggtitle(paste("Percentage of Votes by State in the", election_year, "Presidential Election")) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "bottom")  # Move the legend to the bottom
+```
+
+The plot shows that the Democrats candidate garnered many votes in District of Colombia, Massachusetts, Vermont, New York among others. Republicans on the other hand had higher percentages of votes from Oklahoma, tennessee, Wyoming, West Virginia among other states as shown in the plot 4 above.
+
+
+*Plot 7: Showing Party Popularity based on proportion of Votes Garnered*
+```{r, message=FALSE}
+# Filter the candidates based on party affiliation (case-insensitive)
+summary_table2 <- elections_data %>%
+  group_by(year, party_simplified) %>%              
+  summarise(
+    party_Votes = sum(candidatevotes),
+    Total_votes = sum(totalvotes)
+  )
+summary_table3 <- summary_table2 %>%
+  mutate(party_category = if_else(str_detect(party_simplified, "(?i)dem"), "DEMOCRAT",
+                                  if_else(str_detect(party_simplified, "(?i)rep"), "REPUBLICAN", "OTHER"))) %>%
+  group_by(year, party_category) %>%
+  summarise(
+    votes = sum(party_Votes) / sum(Total_votes)
+  )
+flex <- flextable(summary_table3, cwidth = 3)
+summary_table3 %>% ggplot(aes(x= year,
+                             y = votes,
+                            colour = party_category))+
+  geom_line()+
+  labs(title = "Party Popularity based on Proportion of Votes Garnered ",
+       subtitle = "from the Total Votes Cast From 1976 to 2020",
+    x = "Year",
+    y = "Proportion Votes Garnered ",
+    caption = " Data: MIT Election Data and Science Lab",
+    colour = "Party")+
+  scale_color_manual(values = c("REPUBLICAN"="red","DEMOCRAT"= "blue","OTHER"="green1"))+
+  scale_y_continuous(labels = scales::comma_format()) +
+  scale_x_continuous(breaks = seq(1976, 2020, by = 4))+
+  theme(legend.position = "bottom",
+        text = element_text(face = "bold"),
+        axis.text.x = element_text(angle = 45,
+                                   size =8,vjust=0.7))
+```
+
+According to plot 7 above, it can concluded that the Democrats have had the most party popularity as compared to Republicans and Other parties for the period between 1976 to 2020.
+
+*Plot 5: showing states that have Constantly Voted for Republican Party since 1976*
+```{r, warning=FALSE, message=FALSE}
+party_votes_each_state <- elections_data %>%
+  filter(party_simplified %in% c("Dem", "Rep")) %>%
+  group_by(state, party_simplified) %>%
+  summarise(mean_votes = mean(candidatevotes))
+state_Party <- party_votes_each_state %>%
+  group_by(state) %>%
+  summarise(mean_democrat_votes = mean(ifelse(party_simplified == "Dem", mean_votes, 0)),
+            mean_republican_votes = mean(ifelse(party_simplified == "Rep", mean_votes, 0))) %>%
+  mutate(Party = ifelse(mean_democrat_votes > mean_republican_votes, "Dem","Rep"))
+
+
+Republican_states <- state_Party %>%
+  filter(Party == "Rep") %>%
+  arrange(desc(mean_republican_votes)) %>%
+  head(15)
+flex <- flextable(Republican_states,cwidth = 3)
+
+
+ggplot(Republican_states, aes(x = fct_reorder(state, mean_republican_votes),y = mean_republican_votes,fill = state)) + 
+  geom_col(colour = "black")+
+   scale_fill_manual(values = c("#D55E00", "#009E73", "#56B4E9", "#CC79A7","green","yellow","bisque1","coral1","cyan","darkslategray1","aquamarine","cadetblue1","azure","chocolate1","aliceblue"))+
+  scale_y_continuous(labels = scales::comma,expand = expansion(mult = c(0, .1)))+
+  labs(
+    title = "States that have Constantly Voted for Republican Party since 1976",
+    x = "State",
+    y = "Mean votes the Republican party garnered since 1976",
+    caption = " Data: MIT Election Data and Science Lab") +
+  theme(legend.position = "", legend.title = element_blank(),
+        axis.text.x = element_text(angle = 45,
+                                   size =8,vjust=0.7))
+```
+
+States that have consistently voted for the Republican Party since 1976 include Texas, Florida, Ohio, North Carolina, Georgia among others as shown in the plot above which shows these states exhibit a long-term and stable allegiance to the Republican political ideology.
+
+*Plot 8: showing states that have Constantly Voted for Democrats Party since 1976*
+```{r}
+first_democrat_states <- state_Party %>%
+  filter(Party == "Dem") %>%
+  arrange(desc(mean_democrat_votes)) %>%
+  head(15)
+flex <- flextable(first_democrat_states,cwidth = 3)
+
+ggplot(first_democrat_states, aes(x = fct_reorder(state, mean_democrat_votes),y = mean_democrat_votes,fill = state)) + 
+  geom_col(colour = "black")+
+  coord_flip()+
+   scale_fill_manual(values = c("darkgoldenrod1","darkblue","darkcyan","darkgoldenrod","darkgray","darkgreen","darkkhaki","darkmagenta","darkolivegreen","darkorange","darkorchid","darkred","darksalmon","darkseagreen","darkslateblue"))+
+  scale_y_continuous(labels = scales::comma,expand = expansion(mult = c(0, .1)))+
+  labs(
+    title = "States that have Constantly Voted for Democrats Party since 1976",
+    x = "State",
+    y = "Mean votes the Democrats party garnered since 1976",
+    caption = " Data: MIT Election Data and Science Lab") +
+  theme(legend.position = "", legend.title = element_blank())
+```
+
+According to the plot above, some of the top states that have constantly voted for the democrats party include, California, New York, Illinois, Pennsylvania, Michigan as well as New Jersy among other states as shown in the figure above.
+
+*Plot 9: showing heatmap from the correlation based on the US census dataset*
+```{r}
+# Select relevant columns
+selected_columns <- c("prop_poverty", "prop_professional", "prop_bachelors", "prop_masters", 
+                      "prop_doctoral", "prop_some_college", "prop_college_no_degree", 
+                      "prop_GED", "prop_highschool", "prop_associates")
+
+# Subset data
+selected_data <- state_census_data[, selected_columns]
+
+# Calculate correlation matrix
+correlation_matrix <- cor(selected_data)
+
+# Melt the correlation matrix for heatmap plotting
+melted_correlation <- as.data.frame(as.table(correlation_matrix))
+colnames(melted_correlation) <- c("Var1", "Var2", "Correlation")
+
+# Plot heatmap with correlation values
+ggplot(melted_correlation, aes(Var1, Var2, fill = Correlation, label = round(Correlation, 1))) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = ifelse(Correlation != 0, format(round(Correlation, 1), nsmall = 1), "")), color = "black", size = 3) +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, limit = c(-1, 1), space = "Lab", name="Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(angle = 0, hjust = 1)) +
+  labs(title = "Correlation Heatmap of proportion variables based on census data")
+```
+
+The correlation heatmap reveals distinct patterns that provide insight into the complex connections between education and characteristics connected to poverty. An intriguing observation is the robust positive correlation of 0.20 between (prop_poverty) and (prop_GED). This implies that regions with higher poverty rates are more likely to have people with the greatest level of education.
+
+On the other hand, there is a clear negative connection of -0.6 between (prop_bachelors) and (prop_highschool). This suggests that areas with a greater density of individuals possessing bachelor's degrees are less prone to having individuals with solely a high school education, underscoring a distinct educational disparity.
+
+The correlation coefficient of 0.85 indicates a strong positive relationship between the proportion of individuals with an masters's degree (prop_masters) and those with a doctoral degree (prop_doctoral), implying a connection between these two educational levels. Regions exhibiting higher concentrations of individuals holding master's degrees also tend to demonstrate a greater prevalence of individuals possessing a doctoral education.
+
+Furthermore, the negative correlation of -0.1 between the proportion of individuals in poverty (prop_poverty) and those in professional occupations (prop_professional) indicates that locations with higher poverty rates are less inclined to have a higher proportion of individuals involved in professional occupations. This association highlights the intricate relationship between socioeconomic conditions and professional achievement within a certain community.
+
+
+*Plot 10: Choropleth Map for the 2016 presidential election race*
+```{r, warning=FALSE, message=FALSE}
+# Downloading state-level shape files from US Census Bureau
+if(!file.exists("cb_2018_us_state_500k.zip")) {
+download.file(url = "https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_state_500k.zip",
+              destfile = "cb_2018_us_state_500k.zip")
+}
+
+# Create directory for geospatial files
+if(!dir.exists("GeoFiles")) {
+dir.create("GeoFiles")
+}
+
+# Unzipping files
+utils::unzip("cb_2018_us_state_500k.zip",
+             exdir = "GeoFiles")
+
+# Loading the shapefiles
+state_shape <- st_read("GeoFiles//cb_2018_us_state_500k.shp",
+                       quiet = TRUE)
+
+
+# Downloading county-level shape files from US Census Bureau
+if(!file.exists("cb_2018_us_county_500k.zip")) {
+download.file(url = "https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_county_500k.zip",
+              destfile = "cb_2018_us_county_500k.zip")
+}
+
+if(!dir.exists("GeoFiles")) {
+  dir.create("GeoFiles/")
+}
+
+# Unzipping files
+utils::unzip("cb_2018_us_county_500k.zip",
+             exdir = "GeoFiles")
+
+# Loading the shapefiles
+county_shape <- st_read("GeoFiles//cb_2018_us_county_500k.shp",
+                        quiet = TRUE)
+
+
+# Downloading and importing state FIPS codes
+if(!file.exists("state-geocodes-v2020.xlsx")) {
+download.file("https://www2.census.gov/programs-surveys/popest/geographies/2020/state-geocodes-v2020.xlsx",
+              destfile = "state-geocodes-v2020.xlsx", mode = "wb")
+}
+
+state_fips <- readxl::read_excel("state-geocodes-v2020.xlsx", skip = 5) %>% 
+  dplyr::transmute(state_fips = `State (FIPS)`,
+                   state = Name)
+
+
+
+# Creating simplified political party definition, and calculating percent of vote earned
+elections <- elections_data %>% 
+    dplyr::mutate(party = case_when(party_simplified == "Dem" ~ "democrat",
+                                    party_simplified == "Rep" ~ "republican",
+                                    TRUE ~ "other"),
+                  prop_vote = candidatevotes / totalvotes)
+
+
+
+# Merging elections data with shape file data
+state_shape_full <- state_shape %>% 
+  dplyr::left_join(elections %>% 
+    dplyr::mutate(GEOID = str_pad(state_fips, width = 2, side = "left", pad = "0")) %>% 
+    group_by(year, state, party) %>% 
+    slice_max(order_by = prop_vote, n = 1) %>% 
+    ungroup() %>%
+    pivot_wider(
+        id_cols = c(year:office, GEOID),
+        names_from = party,
+        values_from = c(candidate, prop_vote),
+        names_sep = "_",
+        names_glue = "{party}_{.value}") %>% rowwise() %>%
+    mutate(across(c(democrat_candidate, other_candidate, republican_candidate),
+                  ~ str_to_title(str_c(rev(str_split(., ", ")[[1]]), collapse = " ")))),
+    by = c("GEOID" = "GEOID"))
+```
+
+
+```{r}
+# Subset data to only for 2016 and Democratic party. Note that mapData should be an 'sf' object
+mapData <- state_shape_full %>% 
+  dplyr::filter(year == 2016)
+
+# Quantitative variable to color areal units (states) by
+myVariable <- round(mapData$democrat_prop_vote, 4)*100
+
+# Variable defining areal units (states)
+myRegions <- mapData$state
+
+# Defining pop-up labels
+labels <- mapData %>% 
+  dplyr::mutate(labels = paste0("<strong>", stringr::str_to_title(state), "</strong><br/>",
+  democrat_candidate, ": ", round(democrat_prop_vote, 4)*100, "% <br/>",
+  republican_candidate, ": ", round(republican_prop_vote, 4)*100, "% <br/>",
+  other_candidate, ": ", round(other_prop_vote, 4)*100, "%") %>% 
+  lapply(htmltools::HTML)) %>% 
+  dplyr::pull(labels)
+
+# Defining nice cut points for coloring
+bins <- seq(20, 80, by = 10)
+
+# Selecting color palette
+pal <- colorBin("RdBu", domain = myVariable, bins = bins)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+# Selecting color palette
+pal <- colorBin("Blues", domain = myVariable, bins = bins)
+
+# Create the choropleth map
+myLeaflet <- leaflet(mapData) %>%
+  setView(lng = -96, lat = 37.8, zoom = 3.5) %>%
+  addProviderTiles("OpenStreetMap.Mapnik", 
+                   options = providerTileOptions(
+    id = "mapbox.light",
+    accessToken = Sys.getenv('MAPBOX_ACCESS_TOKEN'))) %>%
+  addPolygons(
+    fillColor = ~pal(myVariable),
+    weight = 0.80,
+    opacity = 1,
+    color = "black",
+    fillOpacity = 1,
+    highlightOptions = highlightOptions(
+      color = "#666"),
+    label = labels,
+    labelOptions = labelOptions(textsize = "15px")) %>%
+  addLegend(htmltools::div(style="text-align: left;"), 
+            pal = pal, 
+            values = ~ myVariable, 
+            opacity = 0.7, 
+            title = "Percentage of votes Summary (2016)",
+            position = "bottomright") 
+
+# Left-aligning text in legend
+myLeaflet <- htmltools::browsable(
+   htmltools::tagList(
+      list(
+         htmltools::tags$head(
+            htmltools::tags$style(
+               ".leaflet .legend {
+                 text-align: left;
+                 }",
+              ".leaflet .legend i{
+                text-align: left;
+                 }"
+            )
+         ),
+       myLeaflet)))
+
+myLeaflet
+```
+
+## 4. Monte Carlo Methods of Inference
+```{r}
+# Extract relevant columns
+data_subset <- elections_data %>%
+  filter(year == 2020) %>%
+  select(state, totalvotes)
+
+# Set seed for reproducibility
+set.seed(123)
+
+# Function to calculate the test statistic (difference in means)
+calculate_test_statistic <- function(data) {
+  data <- data %>%
+    mutate(group = sample(c(1, 2), n(), replace = TRUE))  # Add group column
+    
+  group1 <- data %>%
+    filter(group == 1) %>%
+    pull(totalvotes)
+  
+  group2 <- data %>%
+    filter(group == 2) %>%
+    pull(totalvotes)
+  
+  return(mean(group1) - mean(group2))
+}
+
+# Observed test statistic
+observed_statistic <- calculate_test_statistic(data_subset)
+
+# Number of permutations
+num_permutations <- 1000
+
+# Perform permutation test
+permutation_results <- replicate(num_permutations, {
+  data_subset %>%
+    calculate_test_statistic()
+})
+
+# Create null distribution plot
+null_distribution_plot <- ggplot() +
+  geom_density(aes(x = permutation_results), fill = "skyblue", alpha = 0.7) +
+  geom_vline(xintercept = observed_statistic, color = "red", linetype = "dashed", linewidth = 1) +
+  geom_vline(xintercept = quantile(permutation_results, 0.95), linetype = "dashed", linewidth = 1) +
+  labs(title = "Permutation Test Null Distribution",
+       x = "Difference in Means (Total Votes)",
+       y = "Density") +
+  scale_y_continuous(labels = scales::comma_format())+
+  scale_x_continuous(labels = scales::comma_format())+
+  theme_minimal()
+
+# Display the null distribution plot
+print(null_distribution_plot)
+
+# Calculate p-value
+p_value <- mean(permutation_results >= observed_statistic)
+
+# Interpretation of the result
+if (p_value < 0.05) {
+  cat("The result is statistically significant at the 5% level. There is evidence to reject the null hypothesis.\n")
+} else {
+  cat("The result is not statistically significant at the 5% level. Fail to reject the null hypothesis.\n")
+}
+
+# Display the p-value
+cat("p-value:", p_value, "\n")
+```
+
+The result is not statistically significant at the 5% level, with a p-value of 0.852. This suggests that there is not enough evidence to reject the null hypothesis. In the context of the permutation test comparing the total votes for the year 2020 based on each state, the p-value of 0.852 indicates that the observed difference in means is likely to occur due to random chance. Therefore, we fail to reject the null hypothesis, and we do not have sufficient evidence to claim a significant difference in total votes between the groups.
+
+In simpler terms, the high p-value suggests that any observed difference in total votes between the groups is likely to be a result of **random variability rather than a true difference in the population**.
+
+## 5. Boostrap Method of Inference
+```{r}
+# Extract relevant column for the variable of interest
+variable_of_interest <- elections_data %>%
+  filter(year == 2020) %>%
+  pull(totalvotes)  # Replace 'totalvotes' with the actual variable name
+
+# Number of bootstrap samples
+num_bootstraps <- 1000
+
+# Function to calculate the statistic of interest (median)
+calculate_statistic <- function(data) {
+  return(median(data))
+}
+
+# Bootstrap resampling
+bootstrap_results <- replicate(num_bootstraps, {
+  resample_data <- sample(variable_of_interest, replace = TRUE)
+  calculate_statistic(resample_data)
+})
+
+# Calculate the lower and upper bounds of a 95% bootstrap confidence interval
+lower_bound <- quantile(bootstrap_results, 0.025)
+upper_bound <- quantile(bootstrap_results, 0.975)
+
+# Create bootstrap distribution plot
+bootstrap_distribution_plot <- ggplot() +
+  geom_density(aes(x = bootstrap_results), fill = "skyblue", alpha = 0.7) +
+  geom_vline(xintercept = lower_bound, linetype = "dashed", color = "red", linewidth = 1) +
+  geom_vline(xintercept = upper_bound, linetype = "dashed", color = "red", linewidth = 1) +
+  labs(title = "Bootstrap Distribution and 95% Confidence Interval",
+       x = "Bootstrap Sample Medians",
+       y = "Density") +
+  scale_y_continuous(labels = scales::comma_format())+
+  theme_minimal()
+
+# Display the bootstrap distribution plot
+print(bootstrap_distribution_plot)
+
+# Interpretation of the result
+cat("The 95% bootstrap confidence interval for the median of the variable of interest is [", lower_bound, ", ", upper_bound, "]\n")
+```
+
+The 95% bootstrap confidence interval for the median of the variable of interest (total votes in this case) is [2,148,062, 3,033,118]. This interval suggests that we are 95% confident that the true median of the total votes lies within this range based on the bootstrap resampling. It provides a measure of the uncertainty associated with our point estimate of the median. The narrower the interval, the more precise our estimate, and in this case, it indicates a relatively tight range for the median total votes.
+
+## 6. Conclusions / Main Takeaways
+The data analysis reveals intriguing patterns and insights into the dynamics of presidential elections in the United States from 1976 to 2020. Notably, a recurrent theme is the frequency with which candidates run for presidency, with a majority participating in two elections. Examination of the election outcomes suggests a dominance of Democratic candidates, with 8 securing popular votes compared to 4 Republicans during this period.
+
+President Biden, Joseph R. Jr., stands out for securing the highest popular votes of all time in a presidential election, amassing 81,268,908 votes in 2020. An interesting observation is the surge in write-in votes during the same year, indicating a notable number of voters manually adding non-ballot candidates.
+
+A deeper exploration of the data highlights a correlation between a state's population and the likelihood of a portion of that population being in poverty. For instance, California, with the highest population, also exhibits the highest population of poor individuals. Conversely, Wyoming, with the lowest population, has fewer people in poverty.
+
+A compelling scatterplot for the year 2016 further underscores the correlation between a state's population and the total votes cast. Notable states such as California, Florida, Texas, New York, Pennsylvania, and Illinois emerge as key contributors to high population and total votes, while states like Wyoming, the District of Columbia, Alaska, Vermont, North Dakota, South Dakota, and Hawaii exhibit lower population and total votes.
+
+Examining the political landscape, Democrats consistently dominate in states like California, New York, Illinois, Pennsylvania, and Michigan, while Republicans maintain strongholds in Texas, Florida, Ohio, North Carolina, and Georgia. Long-term allegiance to the Republican Party is observed in these states, reflecting stable political ideologies over the years.
+
+In summary, the analysis sheds light on candidate behaviors, voting patterns, and the influence of demographics on election outcomes, providing valuable insights into the complex dynamics of the U.S. presidential elections.
+
+
+## Main Takeaways
+*Candidate Participation*:
+Most candidates tend to run for the presidency twice, demonstrating a recurring pattern in electoral participation.
+
+*Party Dominance*:
+Democrats have been more successful in winning popular votes, securing victory in 8 out of 12 elections compared to Republicans.
+
+*Record-Breaking Votes*:
+President Biden, Joseph R. Jr., achieved the highest number of popular votes in a presidential election, garnering 81,268,908 votes in 2020.
+
+*Write-in Votes Surge*:
+The year 2020 witnessed a notable increase in write-in votes, indicating a substantial number of voters manually adding non-ballot candidates.
+
+*Population and Poverty*:
+There is a correlation between a state's population and the likelihood of a portion of that population being in poverty.
+
+*Scatterplot Insights*:
+The scatterplot analysis for the year 2016 underscores the correlation between a state's population and the total votes cast.
+
+*Political Affiliations*:
+States exhibit distinct political tendencies, with Democrats dominating in states like California and Republicans holding strongholds in states like Texas and Florida.
+
+*Consistent Voting Patterns*:
+Certain states have consistently voted for either the Democratic or Republican Party over the years, reflecting stable political ideologies.
+
